@@ -9,6 +9,12 @@ namespace viiidem_customlauncher_min
 {
     internal static class Program
     {
+        // ============================================================
+        // CONFIGURE SILENT WINDOW OBSERVATION
+        // Poll quickly so bootstrap windows are hidden as soon as they appear.
+        // ============================================================
+        private const int SilentWindowPollIntervalMilliseconds = 25;
+
         private static void Main(string[] args)
         {
             // Base directory where this launcher is running
@@ -59,22 +65,26 @@ namespace viiidem_customlauncher_min
 
             using (var proc = Process.Start(psi))
             {
-                // In silent mode, actively hide GUI windows of the child process by PID.
-                // This mirrors the working approach from your original Program.cs
                 if (silent && proc != null)
                 {
-                    var until = DateTime.UtcNow.AddSeconds(15); // short time window to catch initial/splash windows
-                    while (!proc.HasExited && DateTime.UtcNow < until)
+                    // ============================================================
+                    // HIDE BOOTSTRAP WINDOWS DURING THE STARTUP PERIOD
+                    // The final game window uses a different title and remains visible.
+                    // ============================================================
+                    var startupObservationDeadline = DateTime.UtcNow.AddSeconds(15);
+                    while (!proc.HasExited && DateTime.UtcNow < startupObservationDeadline)
                     {
-                        // Best-effort: hide any visible window that belongs to the game's PID
                         HideWindowsByPid(proc.Id, "FFVIII.exe");
-                        Thread.Sleep(250);
+                        Thread.Sleep(SilentWindowPollIntervalMilliseconds);
                     }
                 }
             }
         }
 
-        // ==== Window hiding  ====
+        // ============================================================
+        // DECLARE WIN32 WINDOW ENUMERATION AND HIDING INTEROP
+        // Keep all native operations scoped to bootstrap process windows.
+        // ============================================================
 
         [DllImport("user32.dll")]
         private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
@@ -96,10 +106,17 @@ namespace viiidem_customlauncher_min
         [DllImport("user32.dll")]
         private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
+        // ============================================================
+        // DEFINE THE WIN32 HIDE COMMAND
+        // ShowWindow receives this value for matching bootstrap windows.
+        // ============================================================
         private const int SW_HIDE = 0;
 
-        // Hide all visible top-level windows that belong to the given PID.
-        // titleNeedle is optional; when provided, we also check title contains the needle.
+        // ============================================================
+        // HIDE BOOTSTRAP WINDOWS FOR SILENT LAUNCHES
+        // Match only the bootstrap title so the final game remains visible.
+        // ============================================================
+
         private static void HideWindowsByPid(int pid, string titleNeedle = null)
         {
             EnumWindows((hWnd, _) =>
@@ -113,15 +130,19 @@ namespace viiidem_customlauncher_min
                     if (wPid != (uint)pid)
                         return true;
 
-                    int len = GetWindowTextLength(hWnd);
-                    var sb = len > 0 ? new StringBuilder(len + 1) : new StringBuilder(1);
-                    if (len > 0) GetWindowText(hWnd, sb, sb.Capacity);
+                    int titleLength = GetWindowTextLength(hWnd);
+                    var titleBuilder = titleLength > 0
+                        ? new StringBuilder(titleLength + 1)
+                        : new StringBuilder(1);
+                    if (titleLength > 0)
+                        GetWindowText(hWnd, titleBuilder, titleBuilder.Capacity);
 
-                    string title = sb.ToString();
-
-                    if (string.IsNullOrEmpty(titleNeedle) ||
-                        (!string.IsNullOrEmpty(title) &&
-                         title.IndexOf(titleNeedle, StringComparison.OrdinalIgnoreCase) >= 0))
+                    string title = titleBuilder.ToString();
+                    if (string.IsNullOrEmpty(titleNeedle)
+                        || (!string.IsNullOrEmpty(title)
+                            && title.IndexOf(
+                                titleNeedle,
+                                StringComparison.OrdinalIgnoreCase) >= 0))
                     {
                         ShowWindow(hWnd, SW_HIDE);
                     }
